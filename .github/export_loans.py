@@ -5,11 +5,10 @@ Q = """select v.seg, v.core, v.lc_num, array_to_string(v.acts[1:5], ', ') acts,
   coalesce(l.contact->>'address', v.addr) addr, coalesce(l.contact->>'phone', v.tel) place_tel, array_to_string(c.phones, ', ') site_tel,
   c.homepage, array_to_string(c.emails, ', ') emails, c.ceo, c.biz_no,
   l.contact->>'url' kakao_place, s.local->0->>'link' naver_place_link, s.local->0->>'cat' naver_cat,
-  c.src::text email_src, s.links::text mention_links, (l.lat is not null) on_map
- from loan_view v left join leads l on l.source='loanreg' and l.external_id=v.lc_num left join loan_contacts c on c.core=v.core
+  c.src::text email_src, s.links::text mention_links, (l.lat is not null) on_map, p.verified, p.metro
+ from loan_pick p join loan_view v on v.lc_num = p.lc_num left join leads l on l.source='loanreg' and l.external_id=v.lc_num left join loan_contacts c on c.core=v.core
  left join loan_scan s on s.name=v.core
- where v.seg <> '플랫폼'
- order by v.seg, v.core"""
+ order by p.verified desc, v.seg, v.core"""
 with psycopg.connect(os.environ["DATABASE_URL"]) as c:
     cur = c.execute(Q)
     cols = [d.name for d in cur.description]
