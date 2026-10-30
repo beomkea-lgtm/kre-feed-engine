@@ -197,7 +197,8 @@ def build_tx_spike(conn: psycopg.Connection, s: Settings, as_of: datetime, expir
     out = []
     for key, value, prev, pct, meta in rows:
         value = int(value)
-        if not (pct is None or pct >= s.tx_spike_pct):
+        # 전주 기준치가 있어야 급증 (처음 수집한 주는 몇 달 치 계약이 '새로 공개'로 한꺼번에 잡혀 가짜 급증이 된다)
+        if prev is None or float(prev) < s.tx_spike_min or pct is None or pct < s.tx_spike_pct:
             continue
         meta = meta or {}
         label = _region_label(meta, key)
