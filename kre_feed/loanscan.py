@@ -198,12 +198,21 @@ def run() -> dict:
             if total <= (pg + 1) * 100:
                 return
 
-    # 1) 넓게 훑기
+    # 1) 넓게 훑기 (등록부 모드면 위탁 문구 질의만)
+    reg_mode = os.environ.get("LOAN_FROM_REGISTRY") == "1"
     jobs = []
-    for g in GENERIC:
+    for ph in ["\"주택담보대출 모집업무 위탁\"", "\"모집업무 위탁계약을 체결한\"", "\"위탁계약을 체결한 대출모집인\"", "\"대출모집업무 위탁\"",
+               "\"모집업무 위탁 계약을 체결한 대출모집인\"", "\"주택담보대출 모집업무\" 생명", "\"주택담보대출 모집업무\" 해상", "\"주택담보대출 모집업무\" 신협"]:
+        for k, pages in (("web", 10), ("blog", 10), ("cafe", 3), ("kin", 2)):
+            jobs.append((k, ph, pages))
+    if reg_mode:
+        GEN, FINS = [], []
+    else:
+        GEN, FINS = GENERIC, BANKS1 + FIN2
+    for g in GEN:
         for k, pages in (("web", 5), ("blog", 3), ("news", 3), ("cafe", 2)):
             jobs.append((k, g, pages))
-    for f in BANKS1 + FIN2:
+    for f in FINS:
         for t in TEMPLATES:
             for k, pages in (("web", 2), ("blog", 1), ("news", 1)):
                 jobs.append((k, t.format(f=f), pages))
@@ -215,7 +224,12 @@ def run() -> dict:
     for n in SEED_NAMES:
         mention[n] += 0
     cand = [n for n, _ in mention.most_common() if mention[n] >= 2 or n in SEED_NAMES]
-    cand = list(dict.fromkeys(SEED_NAMES + cand))[: int(os.environ.get("LOAN_MAX_NAMES", "700"))]
+    if reg_mode:
+        with psycopg.connect(db) as c:
+            done = {r[0] for r in c.execute("select name from loan_scan").fetchall()}
+            regs = [r[0] for r in c.execute("select name from loan_registry where seg <> 'platform/대형' order by seg").fetchall()]
+        cand = list(dict.fromkeys([n for n in regs if n not in done] + [n for n in cand if n not in done]))
+    cand = list(dict.fromkeys((SEED_NAMES if not reg_mode else []) + cand))[: int(os.environ.get("LOAN_MAX_NAMES", "700"))]
     rows = {}
 
     def deep(n: str):
