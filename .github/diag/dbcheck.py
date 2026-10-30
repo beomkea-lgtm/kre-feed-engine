@@ -7,6 +7,7 @@ import psycopg
 
 u = os.environ.get("DATABASE_URL", "")
 notes = []
+p = None
 if not u:
     notes.append("DATABASE_URL 비어 있음")
 else:
@@ -17,13 +18,13 @@ else:
         specials = sorted(set(re.sub(r"[A-Za-z0-9]", "", pw)))
         notes.append(f"scheme {p.scheme} · host {p.hostname} · port {p.port} · user {p.username} · db {p.path} · 비번 길이 {len(pw)} · 비번 특수문자 {''.join(specials) or '없음'}")
     except Exception as e:
-        notes.append(f"주소 해석 실패: {type(e).__name__}")
+        notes.append(f"주소 해석 실패: {type(e).__name__}: {str(e)[:80]}")
     try:
         with psycopg.connect(u.strip(), connect_timeout=10) as c:
             notes.append("접속 OK: " + str(c.execute("select current_user").fetchone()[0]))
     except Exception as e:
         msg = str(e)
-        if p.password:
+        if p is not None and p.password:
             msg = msg.replace(p.password, "***")
         notes.append(f"접속 실패 {type(e).__name__}: {msg[:300]}".replace("\n", " "))
 for n in notes:
