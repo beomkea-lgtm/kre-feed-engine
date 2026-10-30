@@ -1,0 +1,71 @@
+name: kre-feed daily
+
+on:
+  schedule:
+    - cron: "13 20 * * *"   # 매일 05:13 KST 예정 (정각 예약은 3시간 넘게 밀려 09시대에 돌던 것 → 분을 흩고 앞당김)
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".trigger"]    # 커맨드센터(Claude)가 .trigger를 바꿔 push하면 즉시 실행
+
+concurrency:
+  group: kre-feed
+  # 커맨드센터의 push(.trigger)는 돌고 있던 실행을 끊고 새로 시작 (진행분은 단계마다 커밋돼 있어 안전). 06시 cron은 기다린다.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: write    # 실행 로그를 logs/ 에 커밋 (커맨드센터가 Actions 로그를 못 읽어서)
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      NAVER_CLIENT_ID_2: ${{ secrets.NAVER_CLIENT_ID_2 }}
+      NAVER_CLIENT_SECRET_2: ${{ secrets.NAVER_CLIENT_SECRET_2 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: locate app
+        run: echo "APP_DIR=$(dirname "$(find . -name requirements.txt -not -path './.git/*' | head -1)")" >> "$GITHUB_ENV"
+      - name: install
+        run: cd "$APP_DIR" && pip install -r requirements.txt
+      - name: init schema
+        run: |
+          cd "$APP_DIR"
+          set -o pipefail
+          python -m kre_feed init-db 2>&1 | tee "$RUNNER_TEMP/init.log" || { cp "$RUNNER_TEMP/init.log" "$RUNNER_TEMP/run.log"; exit 1; }
+      - name: daily run
+        run: |
+          cd "$APP_DIR"
+          set -o pipefail
+          FLAGS=""
+          if [ "${{ github.event_name }}" = "push" ] && head -c 4 .trigger 2>/dev/null | grep -q fast; then FLAGS="--skip-collect"; fi
+          # .trigger 에 noemail 이 있으면 메일 단계는 건너뜀 (스윕이 따로 돌 때 네이버 한도 중복 사용 방지)
+          if [ "${{ github.event_name }}" = "push" ] && grep -q noemail .trigger 2>/dev/null; then export EMAIL_MODE=off; fi
+          # .trigger 에 refresh 가 있으면 리더보드 카드를 지금 순위로 다시 맞춤 (밀려난 카드 만료)
+          if [ "${{ github.event_name }}" = "push" ] && grep -qw refresh .trigger 2>/dev/null; then export ISSUES_REFRESH=1; fi
+          # .trigger 에 nohq 가 있으면 2금융 본점 묶기 끔 (롤백)
+          if [ "${{ github.event_name }}" = "push" ] && grep -qw nohq .trigger 2>/dev/null; then export RANK_FINANCE_HQ=0; fi
+          # .trigger 에 props=rh 처럼 쓰면 그 유형만 수집 (새로 연결한 API 한 바퀴 등)
+          if [ "${{ github.event_name }}" = "push" ] && grep -qo 'props=[a-z,]*' .trigger 2>/dev/null; then export PROP_TYPES=$(grep -o 'props=[a-z,]*' .trigger | head -1 | cut -d= -f2); echo "PROP_TYPES=$PROP_TYPES"; fi
+          : > "$RUNNER_TEMP/run.log"
+          # 3분마다 진행 로그를 Supabase run_logs 에 올린다 (커맨드센터가 중간에 읽고 오류를 잡는다)
+          bash "$GITHUB_WORKSPACE/.github/push_log.sh" loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          python -m kre_feed daily $FLAGS 2>&1 | tee "$RUNNER_TEMP/run.log"
+      - name: status
+        if: always()
+        run: cd "$APP_DIR" && python -m kre_feed status 2>&1 | tee -a "$RUNNER_TEMP/run.log"
+      - name: save log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid" 2>/dev/null)" 2>/dev/null || true
+          cd "$APP_DIR" && bash "$GITHUB_WORKSPACE/.github/push_log.sh" once "$RUNNER_TEMP/run.log" "${{ job.status }}"

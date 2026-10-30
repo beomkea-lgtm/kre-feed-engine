@@ -1,0 +1,54 @@
+name: kre-feed emails
+
+on:
+  # 정기 실행 없음 — 초기 스윕은 sweep.yml (00시 4조각). 필요할 때만 .trigger-emails 로.
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".trigger-emails"]
+
+concurrency:
+  group: kre-feed-emails
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: write
+
+jobs:
+  emails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      NAVER_CLIENT_ID_2: ${{ secrets.NAVER_CLIENT_ID_2 }}
+      NAVER_CLIENT_SECRET_2: ${{ secrets.NAVER_CLIENT_SECRET_2 }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      EMAIL_DAILY_LEADS: "1000"
+      EMAIL_PAGE_BUDGET: "5000"
+      EMAIL_DAILY_REGIONS: "60"
+      LOG_NAME: emails
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: init schema
+        run: python -m kre_feed init-db
+      - name: emails
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/run.log"
+          bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          python -m kre_feed emails 2>&1 | tee "$RUNNER_TEMP/run.log"
+      - name: status
+        if: always()
+        run: python -m kre_feed status 2>&1 | tee -a "$RUNNER_TEMP/run.log"
+      - name: save log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid" 2>/dev/null)" 2>/dev/null || true
+          bash .github/push_log.sh once "$RUNNER_TEMP/run.log" "${{ job.status }}"

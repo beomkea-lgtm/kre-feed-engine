@@ -1,0 +1,75 @@
+name: kre-feed email sweep
+
+# 초기 스윕: 메일 없는 전 리드를 4조각으로 나눠 동시에. 리드당 네이버 검색 3회(EMAIL_LIGHT).
+# 네이버 하루 한도에 닿으면 남은 리드는 확인 표시 없이 남겨 다음 실행이 이어 간다. 대상이 없어지면 몇 분 만에 끝난다.
+on:
+  # 평일: 인플루언서 수집이 끝나면 바로 (아래 workflow_run) + 혹시 못 돌았을 때 04:41
+  # 주말: 인플루언서는 쉬고 00:23 · 03:23 · 06:23 세 번 — 네이버 한도를 메일 발굴에 몰아준다
+  # (정각 예약은 GitHub 이 몇 시간씩 밀거나 건너뛴다 → 분을 흩어 둠)
+  schedule:
+    - cron: "41 19 * * 0-4"
+    - cron: "23 15,18,21 * * 5,6"
+  workflow_run:
+    workflows: ["kre-feed influencers"]
+    types: [completed]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".trigger-sweep"]
+
+concurrency:
+  group: kre-feed-sweep
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      NAVER_CLIENT_ID_2: ${{ secrets.NAVER_CLIENT_ID_2 }}
+      NAVER_CLIENT_SECRET_2: ${{ secrets.NAVER_CLIENT_SECRET_2 }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      EMAIL_SHARDS: "4"
+      EMAIL_SHARD: ${{ matrix.shard }}
+      EMAIL_LIGHT: "1"
+      EMAIL_DAILY_LEADS: "1300"
+      EMAIL_PAGE_BUDGET: "7000"
+      EMAIL_DAILY_REGIONS: "60"
+      LOG_NAME: sweep-${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: init schema
+        if: matrix.shard == 0
+        run: python -m kre_feed init-db
+      - name: wait for schema
+        if: matrix.shard != 0
+        run: sleep 20
+      - name: emails (shard)
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/run.log"
+          bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          python -m kre_feed emails 2>&1 | tee "$RUNNER_TEMP/run.log"
+      - name: status
+        if: always() && matrix.shard == 0
+        run: python -m kre_feed status 2>&1 | tee -a "$RUNNER_TEMP/run.log"
+      - name: save log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid" 2>/dev/null)" 2>/dev/null || true
+          bash .github/push_log.sh once "$RUNNER_TEMP/run.log" "${{ job.status }}"

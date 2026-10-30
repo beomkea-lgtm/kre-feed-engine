@@ -1,0 +1,62 @@
+name: kre-feed influencers
+
+on:
+  # 평일 00:17 KST (정각은 GitHub 예약이 몰려 몇 시간씩 밀린다). 주말은 쉬고 네이버 한도를 메일 발굴에 몰아준다.
+  # 끝나면 메일 스윕이 이어서 돈다 (sweep.yml workflow_run). 지금 돌리려면 .trigger-influencers
+  schedule:
+    - cron: "17 15 * * 0-4"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".trigger-influencers"]
+
+concurrency:
+  group: kre-feed-influencers
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: write
+
+jobs:
+  influencers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      NAVER_CLIENT_ID_2: ${{ secrets.NAVER_CLIENT_ID_2 }}
+      NAVER_CLIENT_SECRET_2: ${{ secrets.NAVER_CLIENT_SECRET_2 }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      LOG_NAME: influencers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: init schema
+        run: python -m kre_feed init-db
+      - name: influencers
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/run.log"
+          bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          # ① 직접수요(매수 여정) → ② 테크·투자(잠재 고지불층). .trigger-influencers 에 tech 만 있으면 ②만
+          if [ "${{ github.event_name }}" = "push" ] && grep -qw "tech" .trigger-influencers 2>/dev/null; then
+            python -m kre_feed influencers tech 2>&1 | tee "$RUNNER_TEMP/run.log"
+            python -m kre_feed creators 2>&1 | tee -a "$RUNNER_TEMP/run.log"
+          elif [ "${{ github.event_name }}" = "push" ] && grep -qw "creators" .trigger-influencers 2>/dev/null; then
+            python -m kre_feed creators 2>&1 | tee "$RUNNER_TEMP/run.log"
+          else
+            # 00:05 — 셋 다 네이버 먼저, 한도 소진되면 카카오로. 하나가 실패해도 다음 건 돈다
+            python -m kre_feed influencers 2>&1 | tee "$RUNNER_TEMP/run.log" || true
+            python -m kre_feed influencers tech 2>&1 | tee -a "$RUNNER_TEMP/run.log" || true
+            python -m kre_feed creators 2>&1 | tee -a "$RUNNER_TEMP/run.log"
+          fi
+      - name: save log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid" 2>/dev/null)" 2>/dev/null || true
+          bash .github/push_log.sh once "$RUNNER_TEMP/run.log" "${{ job.status }}"

@@ -1,0 +1,51 @@
+name: kre-feed metro places
+
+on:
+  # 경기권(서울·경기) 세무사·중개사 전수 수집 — 칸 단위로 이어서 돈다. 다 돌면 할 일 없이 끝나고, 30일마다 처음부터 다시 (매일 02:30 KST)
+  schedule:
+    - cron: "37 17 * * *"
+  push:
+    branches: [main]
+    paths: [".trigger-metro"]
+  workflow_dispatch:
+    inputs:
+      kinds:
+        description: "tax,broker"
+        default: "tax,broker"
+      budget:
+        description: "카카오 호출 예산"
+        default: "20000"
+
+concurrency:
+  group: kre-feed-metro-places
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      LOG_NAME: metro-places
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: sweep
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/run.log"
+          bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          python -m kre_feed sweep "${{ github.event.inputs.kinds || 'tax,broker' }}" "${{ github.event.inputs.budget || '20000' }}" 2>&1 | tee "$RUNNER_TEMP/run.log"
+      - name: push log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid")" 2>/dev/null || true
+          bash .github/push_log.sh once "$RUNNER_TEMP/run.log" "${{ job.status }}"
