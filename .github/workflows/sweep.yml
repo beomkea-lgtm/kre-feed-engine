@@ -64,6 +64,9 @@ jobs:
           : > "$RUNNER_TEMP/run.log"
           bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
           echo $! > "$RUNNER_TEMP/logloop.pid"
+          # 메일 발굴 몫(네이버): 평일 2만 · 주말 4만 (주말은 인플루언서가 쉬어 한도를 몰아준다)
+          if [ "$(TZ=Asia/Seoul date +%u)" -ge 6 ]; then export EMAIL_NAVER_DAILY_CAP=40000; else export EMAIL_NAVER_DAILY_CAP=20000; fi
+          echo "EMAIL_NAVER_DAILY_CAP=$EMAIL_NAVER_DAILY_CAP"
           python -m kre_feed emails 2>&1 | tee "$RUNNER_TEMP/run.log"
       - name: status
         if: always() && matrix.shard == 0
