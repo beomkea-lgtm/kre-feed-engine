@@ -1,0 +1,22 @@
+name: loanreg
+on:
+  push:
+    branches: [main]
+    paths: [".trigger-loanreg"]
+  schedule:
+    - cron: "37 21 * * 0"
+concurrency:
+  group: loanreg
+jobs:
+  reg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt
+      - run: python -m kre_feed.loanreg
