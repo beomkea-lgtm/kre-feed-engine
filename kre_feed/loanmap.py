@@ -45,7 +45,11 @@ def run() -> dict:
                              where f.n_active > 0 group by f.lc_num, f.name""").fetchall()
         scan = {core(n): loc for n, loc in c.execute("select name, local from loan_scan where local is not null and local::text <> '[]'").fetchall()}
         done = {r[0] for r in c.execute("select external_id from leads where source='loanreg' and lat is not null").fetchall()}
+        cap = re.compile(r"캐피탈|카드|리스|파이낸셜서비스|커머셜|오토|렌터카|BMW|벤츠|토요타|폭스바겐|볼보")
         for lc, name, acts in firms:
+            acts = [a for a in acts if a]
+            if not acts or all(cap.search(a) for a in acts):
+                continue   # 자동차 할부·리스 모집만 하는 곳은 뺀다
             stats["firms"] += 1
             if lc in done:
                 continue

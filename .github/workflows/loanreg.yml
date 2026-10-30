@@ -3,8 +3,6 @@ on:
   push:
     branches: [main]
     paths: [".trigger-loanreg"]
-  schedule:
-    - cron: "37 21 * * 0"
 concurrency:
   group: loanreg
 jobs:

@@ -1,8 +1,5 @@
 name: loanmap
 on:
-  workflow_run:
-    workflows: ["loanreg"]
-    types: [completed]
   push:
     branches: [main]
     paths: [".trigger-loanmap"]
