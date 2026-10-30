@@ -58,7 +58,7 @@ def _region_label(region_key: str) -> str:
 # ---------- 대상 선정 ----------
 
 def target_regions(conn: psycopg.Connection, extra_top: int, active: list[str] | None = None) -> list[str]:
-    """열린 이슈 동네 + 활성 시군구 안에서 최근 2주 거래 상위 동네."""
+    """열린 이슈 동네 + 활성 시군구 안에서 최근 2주 거래 상위 동네 + 콜드비짓 상위 동(거래 많은 순)."""
     rows = conn.execute(
         """
         select region_key from issues where status = 'open' and region_key is not null
@@ -75,7 +75,16 @@ def target_regions(conn: psycopg.Connection, extra_top: int, active: list[str] |
         """,
         {"active": active, "top": extra_top},
     ).fetchall()
-    return [r[0] for r in rows]
+    out = [r[0] for r in rows]
+    # 콜드비짓 지도의 거래 상위 30% 동 (Supabase refresh_visit 이 매일 계산) — 거래 많은 동부터 신호를 채운다
+    try:
+        seen = set(out)
+        for (rk,) in conn.execute("select region_key from visit_regions order by rank_no").fetchall():
+            if rk not in seen:
+                out.append(rk); seen.add(rk)
+    except psycopg.Error:
+        conn.rollback()
+    return out
 
 
 def ensure_complexes(conn: psycopg.Connection, regions: list[str]) -> int:
