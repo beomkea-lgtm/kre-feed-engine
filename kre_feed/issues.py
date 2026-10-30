@@ -213,7 +213,9 @@ def build_tx_spike(conn: psycopg.Connection, s: Settings, as_of: datetime, expir
             "dedupe_key": f"tx_spike:{key}:{as_of.date().isoformat()}",
             "expires_at": expires,
         })
-    return out
+    # 하루 상한: 점수 높은 동네만 (10/30 수집 7일차에 기준치가 비어 218장이 한꺼번에 뜸)
+    out.sort(key=lambda x: -x["score"])
+    return out[: s.tx_spike_max]
 
 
 def build_complex_cluster(conn: psycopg.Connection, s: Settings, as_of: datetime, expires: datetime, active: list[str] | None = None) -> list[dict]:

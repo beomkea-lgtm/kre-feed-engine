@@ -54,6 +54,7 @@ class Settings:
     # 이슈 규칙
     tx_spike_min: int = field(default_factory=lambda: int(os.environ.get("TX_SPIKE_MIN", "5")))
     tx_spike_pct: float = field(default_factory=lambda: float(os.environ.get("TX_SPIKE_PCT", "30")))
+    tx_spike_max: int = field(default_factory=lambda: int(os.environ.get("TX_SPIKE_MAX", "10")))      # 하루 거래 급증 카드 상한
     complex_min: int = field(default_factory=lambda: int(os.environ.get("COMPLEX_MIN", "5")))
     issue_ttl_hours: int = field(default_factory=lambda: int(os.environ.get("ISSUE_TTL_HOURS", "24")))
     related_leads_max: int = field(default_factory=lambda: int(os.environ.get("RELATED_LEADS_MAX", "20")))
