@@ -1,0 +1,40 @@
+name: loanscan
+on:
+  push:
+    branches: [main]
+    paths: [".trigger-loanscan"]
+  workflow_dispatch:
+concurrency:
+  group: loanscan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      LOAN_MAX_NAMES: "1500"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt
+      - name: naver status before
+        run: python .github/loanscan_report.py 0
+      - name: scan
+        run: python -m kre_feed.loanscan 2>&1 | tail -5
+      - name: status after
+        if: always()
+        run: python .github/loanscan_report.py 0
+      - name: top 1
+        if: always()
+        run: python .github/loanscan_report.py 1
+      - name: top 2
+        if: always()
+        run: python .github/loanscan_report.py 2
+      - name: top 3
+        if: always()
+        run: python .github/loanscan_report.py 3
