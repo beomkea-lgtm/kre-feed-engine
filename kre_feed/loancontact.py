@@ -24,7 +24,7 @@ CEO_RE = re.compile(r"대표(?:이사|자명|자)\s*[:：|]?\s*([가-힣]{2,4})(
 AGG = re.compile(r"saramin|jobkorea|incruit|albamon|alba\.|wanted|jumpit|catch\.|thevc|innoforest|nicebiz|bizno|localbiz|rndcircle|"
                  r"news|daily|dailian|ilbo|times|press|media|\.go\.kr|\.ac\.kr|wiki|teamblind|zdnet|edaily|mt\.co|hankyung|mk\.co|"
                  r"fntimes|asiae|newsis|yna\.co|joins|chosun|donga|khan|hani|seoul\.co|kfcc|k-lca|loanconsultant|fss\.or|kofia|"
-                 r"credit|kisline|dart\.|bizinfo|find|kmong|soomgo|moneyday|bank-?mall|finda|toss|kakaopay|banksalad|lib\.|go\.kr")
+                 r"kisline|dart\.|bizinfo|kmong|soomgo|moneyday|bank-?mall|finda|toss|kakaopay|banksalad|lib\.|go\.kr")
 BIZ_RE = re.compile(r"사업자(?:등록)?번호\s*[:：|]?\s*(\d{3}-\d{2}-\d{5})")
 TEL_RE = re.compile(r"(?:대표\s*(?:전화|번호)|TEL|Tel|전화|고객센터)\s*[:：|.]?\s*(0\d{1,2}[-.)\s]?\d{3,4}[-.\s]?\d{4}|1\d{3}[-.\s]?\d{4})")
 CEO_STOP = {"번호", "전화", "이메일", "메일", "상담", "문의", "주소", "이사", "인사말", "인사", "자명", "메시지", "상담사", "방송", "이름으로",
