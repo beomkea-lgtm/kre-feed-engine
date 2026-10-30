@@ -14,6 +14,7 @@ jobs:
       KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
       NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
       NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      LOAN_CONTACT_ALL: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
