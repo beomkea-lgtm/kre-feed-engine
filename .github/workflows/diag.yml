@@ -15,4 +15,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q "psycopg[binary]"
-      - run: python .github/diag/dbcheck.py
+      - run: python .github/diag/gangseo.py
