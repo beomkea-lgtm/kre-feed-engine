@@ -2,7 +2,7 @@ name: export
 on:
   push:
     branches: [main]
-    paths: [".trigger-export"]
+    paths: [".trigger-export", ".trigger-export-links"]
 permissions:
   contents: write
 jobs:
@@ -20,9 +20,12 @@ jobs:
       - name: export + encrypt (only the holder of the private key can read it)
         run: |
           python .github/export_loans.py "$RUNNER_TEMP/loans.csv"
-          openssl rand -out "$RUNNER_TEMP/k.bin" 32
-          openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/loans.csv" -out exports/loans.csv.enc -pass file:"$RUNNER_TEMP/k.bin"
-          openssl pkeyutl -encrypt -pubin -inkey .github/export_pub.pem -in "$RUNNER_TEMP/k.bin" -out exports/loans.key.enc
+          python .github/export_links.py "$RUNNER_TEMP/links.csv"
+          for n in loans links; do
+            openssl rand -out "$RUNNER_TEMP/k.bin" 32
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/$n.csv" -out exports/$n.csv.enc -pass file:"$RUNNER_TEMP/k.bin"
+            openssl pkeyutl -encrypt -pubin -inkey .github/export_pub.pem -in "$RUNNER_TEMP/k.bin" -out exports/$n.key.enc
+          done
           git config user.name "kre-feed bot"; git config user.email "bot@users.noreply.github.com"
-          git add exports/loans.csv.enc exports/loans.key.enc
+          git add exports/*.enc
           git commit -m "export (encrypted)" && git push
