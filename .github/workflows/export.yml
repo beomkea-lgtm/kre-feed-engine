@@ -21,7 +21,8 @@ jobs:
         run: |
           python .github/export_loans.py "$RUNNER_TEMP/loans.csv"
           python .github/export_links.py "$RUNNER_TEMP/links.csv"
-          for n in loans links; do
+          python .github/export_contacts.py "$RUNNER_TEMP/loan42.csv" "$RUNNER_TEMP/mapleads.csv"
+          for n in loans links loan42 mapleads; do
             openssl rand -out "$RUNNER_TEMP/k.bin" 32
             openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/$n.csv" -out exports/$n.csv.enc -pass file:"$RUNNER_TEMP/k.bin"
             openssl pkeyutl -encrypt -pubin -inkey .github/export_pub.pem -in "$RUNNER_TEMP/k.bin" -out exports/$n.key.enc
