@@ -1,12 +1,8 @@
 import os, psycopg
-base = """with x as (
-  select il.lead_id, l.type,
-         case when l.type='broker' then 'broker' when l.type in ('tax','legal','platform') then 'partner' else 'finance' end cat,
-         row_number() over (partition by il.issue_id, case when l.type='broker' then 'broker' when l.type in ('tax','legal','platform') then 'partner' else 'finance' end order by il.rank) crank
-  from issue_leads il join issues i on i.id=il.issue_id join leads l on l.id=il.lead_id
-  where i.created_at > now() - interval '30 days' and i.kind in ('tx_14d','complex_14d','tx_spike','complex_cluster')
-    and l.lat is not null and coalesce(l.type,'')<>'legal' and l.status not in ('rejected','hidden'))
-select string_agg(cat||':'||n, ' ') from (select cat, count(distinct lead_id) n from x where crank <= %s group by cat order by cat) y"""
 with psycopg.connect(os.environ["DATABASE_URL"]) as c:
-    for k in (5, 10, 15, 999):
-        print(f"::warning title=top{k}::" + str(c.execute(base % k).fetchone()[0]))
+    try:
+        c.execute(open(".github/diag/map_leads.sql", encoding="utf-8").read()); c.commit(); print("::warning title=view::ok")
+    except Exception as e:
+        c.rollback(); print("::warning title=view::ERR "+str(e)[:300])
+    print("::warning title=count::"+str(c.execute("select count(*)||' / '||string_agg(t||':'||n,' ') from (select case when type='broker' then 'broker' when type in ('tax','platform') then 'partner' else 'finance' end t, count(*) n from map_leads group by 1) x").fetchone()[0]))
+    print("::warning title=songjeong::"+str(c.execute("select count(*) from map_leads where lat between 37.553 and 37.570 and lng between 126.800 and 126.823").fetchone()[0]))
