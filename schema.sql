@@ -300,6 +300,7 @@ alter table influencer_stats add column if not exists segment text not null defa
 -- 뷰는 컬럼이 바뀌면 create or replace가 실패하므로 매번 지우고 다시 만든다 (의존 순서: feed_open → lead_cards)
 drop view if exists feed_open;
 drop view if exists sheet_rows;
+drop view if exists listing_rows;
 drop view if exists map_leads;
 drop view if exists lead_cards;
 drop view if exists kpi_weekly;
@@ -434,6 +435,57 @@ from u left join lateral (
   select meta, occurred_at from events e where e.lead_id = u.id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
   order by occurred_at desc limit 1) ev on true;
 grant select on sheet_rows to anon, authenticated, service_role;
+
+-- 네이버페이 부동산에서 손으로 모은 중개사 매물 수 (시트 탭 '매물순'). 붙여넣기로 들어오고, 통화 기록을 위해 리드와 연결한다.
+create table if not exists broker_listings (
+  reg_key text primary key, reg_no text, name text, phone text, email text, listings int, addr text,
+  lead_id uuid, imported_at timestamptz not null default now()
+);
+alter table broker_listings enable row level security;
+create or replace function name_core(n text) returns text language sql immutable as $fn$
+  select regexp_replace(coalesce(n,''), '(공인중개사사무소|공인중개사무소|공인중개사|중개사사무소|중개사무소|부동산중개|중개법인|부동산|사무소|주식회사|\(주\)|㈜|\([^)]*\)|\s)', '', 'g')
+$fn$;
+create or replace function import_listings(rows jsonb) returns json language plpgsql as $fn$
+declare r record; lid uuid; n_total int := 0; n_known int := 0; n_new int := 0;
+begin
+  for r in select * from jsonb_to_recordset(rows) as x(reg_key text, reg_no text, name text, phone text, email text, listings int, addr text) loop
+    n_total := n_total + 1;
+    lid := (select lead_id from broker_listings where reg_key = r.reg_key);
+    if lid is null then lid := (select id from leads where source = 'naverland' and external_id = r.reg_key limit 1); end if;
+    if lid is null and length(regexp_replace(coalesce(r.phone,''), '\D', '', 'g')) >= 9 then
+      lid := (select id from leads where type = 'broker' and regexp_replace(coalesce(contact->>'phone',''), '\D', '', 'g') = regexp_replace(r.phone, '\D', '', 'g') limit 1);
+    end if;
+    if lid is null and name_core(r.name) <> '' then
+      lid := (select l.id from leads l where l.type = 'broker' and name_core(l.name) = name_core(r.name)
+                and (region_of(l.contact->>'address')).sigungu = (region_of(r.addr)).sigungu limit 1);
+    end if;
+    if lid is null then
+      insert into leads (lane, type, name, contact, status, source, external_id, updated_at)
+      values ('b2b2c', 'broker', r.name, jsonb_strip_nulls(jsonb_build_object('phone', nullif(r.phone,''), 'address', nullif(r.addr,''), 'email', nullif(r.email,''), 'reg_no', nullif(r.reg_no,''))),
+              'new', 'naverland', r.reg_key, now())
+      returning id into lid;
+      n_new := n_new + 1;
+    else
+      n_known := n_known + 1;
+    end if;
+    insert into broker_listings (reg_key, reg_no, name, phone, email, listings, addr, lead_id, imported_at)
+    values (r.reg_key, r.reg_no, r.name, r.phone, nullif(r.email,''), r.listings, r.addr, lid, now())
+    on conflict (reg_key) do update set reg_no = excluded.reg_no, name = excluded.name, phone = excluded.phone, email = excluded.email,
+      listings = excluded.listings, addr = excluded.addr, lead_id = excluded.lead_id, imported_at = now();
+  end loop;
+  return json_build_object('total', n_total, 'known', n_known, 'new', n_new);
+end $fn$;
+create view listing_rows as
+select b.reg_key, b.reg_no, b.name, b.phone, b.email, b.listings, b.addr, b.lead_id as id, b.imported_at,
+       (region_of(b.addr)).sido, (region_of(b.addr)).sigungu,
+       row_number() over (order by b.listings desc nulls last, b.name) as prio,
+       exists (select 1 from map_leads m where m.id = b.lead_id) as on_map,
+       (select count(*) from events e where e.lead_id = b.lead_id and e.type = 'contact') as touch_count,
+       ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
+from broker_listings b
+left join lateral (select meta, occurred_at from events e where e.lead_id = b.lead_id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
+                   order by occurred_at desc limit 1) ev on true;
+grant select on listing_rows to anon, authenticated, service_role;
 
 -- 11. 프론트용: 열린 이슈 + 관련 리드 카드(json). 카드가 안 쓰는 필드·null은 빼서 응답을 가볍게.
 --     issue_leads가 있으면 그 순위·이유로, 없으면(아직 rank 전) related_lead_ids 순서로.
