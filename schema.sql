@@ -299,6 +299,7 @@ alter table influencer_stats add column if not exists segment text not null defa
 
 -- 뷰는 컬럼이 바뀌면 create or replace가 실패하므로 매번 지우고 다시 만든다 (의존 순서: feed_open → lead_cards)
 drop view if exists feed_open;
+drop view if exists map_leads;
 drop view if exists lead_cards;
 drop view if exists kpi_weekly;
 
@@ -356,6 +357,20 @@ left join lateral (
   where lead_id = l.id and status = 'active' order by created_at desc limit 1
 ) e on true;
 
+-- 지도 고정 핀: 최근 30일 이슈에서 순위에 든 업체 (카드가 만료돼도 핀은 남게), 법무사·숨김·거절 제외
+create view map_leads as
+select lc.id, lc.type, lc.name, lc.region_key, lc.lat, lc.lng, lc.status, lc.phone, lc.email, lc.url,
+       lc.touch_count, lc.last_contact_at, lc.last_channel, lc.last_reply_at,
+       x.rank, x.reasons, x.issue_id, x.issue_headline, x.issue_score, x.issue_at
+from (
+  select distinct on (il.lead_id) il.lead_id, il.rank, il.reasons, i.id issue_id, i.headline issue_headline, i.score issue_score, i.created_at issue_at
+  from issue_leads il join issues i on i.id = il.issue_id
+  where i.created_at > now() - interval '30 days' and i.kind in ('tx_14d','complex_14d','tx_spike','complex_cluster')
+  order by il.lead_id, il.rank, i.score desc nulls last, i.created_at desc
+) x join lead_cards lc on lc.id = x.lead_id
+where lc.lat is not null and coalesce(lc.type,'') <> 'legal' and lc.status not in ('rejected','hidden');
+grant select on map_leads to anon, authenticated, service_role;
+
 -- 11. 프론트용: 열린 이슈 + 관련 리드 카드(json). 카드가 안 쓰는 필드·null은 빼서 응답을 가볍게.
 --     issue_leads가 있으면 그 순위·이유로, 없으면(아직 rank 전) related_lead_ids 순서로.
 create view feed_open as
@@ -405,6 +420,7 @@ drop view if exists basket_counts;
 drop view if exists basket_rows;
 create view basket_rows as
 select case when l.type in ('broker','tax','legal','platform') then l.type
+            when l.type = 'loan_broker' then 'loan'
             when s.segment = 'tech' and s.blog_id like '%.%' then 'chan'
             when s.segment = 'tech' then 'tblog'
             else 'blog' end as tab,
@@ -420,7 +436,8 @@ left join influencer_stats s on s.lead_id = l.id
 left join lateral (select sequence, step, next_send_at from enrollments en where en.lead_id = l.id and en.status = 'active' order by en.created_at desc limit 1) e on true
 left join lateral (select max(occurred_at) as last_reply_at from events ev where ev.lead_id = l.id and ev.type = 'reply') r on true
 where l.type in ('influencer','influencer_tech','platform')
-   or (l.type in ('broker','tax','legal') and coalesce(l.contact->>'email','') <> '');
+   or (l.type in ('broker','tax','legal') and coalesce(l.contact->>'email','') <> '')
+   or (l.type = 'loan_broker' and l.status <> 'hidden');   -- 대출중개 탭 (검증 통과분만 status<>hidden)
 create view basket_counts as
 select tab, count(*) as total,
        count(*) filter (where coalesce(email,'') <> '') as mail,
