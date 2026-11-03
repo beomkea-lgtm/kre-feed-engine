@@ -299,6 +299,7 @@ alter table influencer_stats add column if not exists segment text not null defa
 
 -- 뷰는 컬럼이 바뀌면 create or replace가 실패하므로 매번 지우고 다시 만든다 (의존 순서: feed_open → lead_cards)
 drop view if exists feed_open;
+drop view if exists sheet_rows;
 drop view if exists map_leads;
 drop view if exists lead_cards;
 drop view if exists kpi_weekly;
@@ -376,6 +377,63 @@ from (
 ) x join lead_cards lc on lc.id = x.lead_id
 where lc.lat is not null and coalesce(lc.type,'') <> 'legal' and lc.status not in ('rejected','hidden');
 grant select on map_leads to anon, authenticated, service_role;
+
+-- 빨랑튀어 '시트' 탭: 전화·메일 컨택 목록 (대출모집법인 · 중개사 · 세무사). 지역(시·도 / 시·군·구)으로 걸러 우선순위대로 전화.
+create or replace function region_of(addr text, out sido text, out sigungu text) language sql immutable as $fn$
+  select case split_part(coalesce(addr,''),' ',1) when '경기도' then '경기' when '강원도' then '강원' when '충청북도' then '충북' when '충청남도' then '충남'
+              when '전라남도' then '전남' when '경상북도' then '경북' when '경상남도' then '경남'
+              else regexp_replace(split_part(coalesce(addr,''),' ',1), '(특별자치시|특별자치도|특별시|광역시)$', '') end,
+         split_part(coalesce(addr,''),' ',2) || case when split_part(coalesce(addr,''),' ',2) ~ '시$' and split_part(coalesce(addr,''),' ',3) ~ '구$'
+                                                     then ' ' || split_part(coalesce(addr,''),' ',3) else '' end
+$fn$;
+create view sheet_rows as
+with n as (
+  select il.lead_id, count(distinct il.issue_id) n_issues, max(i.score) mx
+  from issue_leads il join issues i on i.id = il.issue_id
+  where i.created_at > now() - interval '30 days' and i.kind in ('tx_14d','complex_14d','tx_spike','complex_cluster') group by 1
+),
+mp as (
+  select m.type as kind, m.id, m.name, m.phone, m.email, l.contact->>'address' addr, m.url, null::text homepage,
+         m.rank best_rank, coalesce(n.n_issues, 0) n_issues, null::int score, m.issue_headline headline, array_to_string(m.reasons, ' · ') why,
+         null::text final, null::text seg, null::text contracts, m.touch_count, m.last_contact_at, m.last_reply_at,
+         row_number() over (partition by m.type order by m.rank, n.n_issues desc nulls last, n.mx desc nulls last, m.name) prio
+  from map_leads m join leads l on l.id = m.id left join n on n.lead_id = m.id
+  where m.type in ('broker','tax')
+),
+ln0 as (
+  select l.id, l.name, l.contact->>'phone' phone, coalesce(l.contact->>'email', c.emails[1]) email, l.contact->>'address' addr, l.contact->>'url' url,
+         nullif(coalesce(l.contact->>'homepage', c.homepage), '') homepage, lv.final, l.contact->>'seg' seg,
+         array_to_string(array(select jsonb_array_elements_text(l.contact->'contracts')), ', ') contracts,
+         lv.maemae, lv.copy_risk, lv.stance, lv.recent, lc.touch_count, lc.last_contact_at, lc.last_reply_at
+  from leads l left join loan_verify lv on lv.lc_num = l.external_id
+  left join lateral (select * from loan_contacts c where c.lc_num = l.external_id or c.core = l.name order by (c.lc_num = l.external_id) desc limit 1) c on true
+  left join lead_cards lc on lc.id = l.id
+  where l.type = 'loan_broker' and l.status <> 'hidden'
+),
+ln as (
+  select ln0.*, (case when final = '통과(검증)' then 3 else 0 end + case maemae when '높음' then 2 when '보통' then 1 else 0 end
+          + case copy_risk when '낮음' then 1 when '높음' then -1 else 0 end + case when stance = '비전형' then 1 else 0 end
+          + case when coalesce(recent,'') >= '2026-01-01' then 1 else 0 end + case when seg in ('1금융','보험') then 1 else 0 end
+          + case when (region_of(addr)).sido in ('서울','경기') then 1 else 0 end) score
+  from ln0
+),
+lnx as (
+  select 'loan'::text kind, id, name, phone, email, addr, url,
+         case when homepage ~ '(kbthink|opensalary|rocketpunch|youtube|xn--|recruit|jobkorea|saramin|jobplanet)' then null else homepage end homepage,
+         null::int best_rank, 0::bigint n_issues, score, nullif(concat_ws(' · ', case when final = '통과(검증)' then '검증 통과' end,
+           case when maemae = '높음' then '매매 비중 높음' end, case when copy_risk = '높음' then '모방 위험' end,
+           case when stance = '비전형' then '비전형' end, case when seg in ('1금융','보험') then seg || ' 위탁' end), '') headline,
+         concat_ws(' · ', '매매 ' || coalesce(maemae,'?'), '모방 ' || coalesce(copy_risk,'?'), '최근 ' || coalesce(recent,'?')) why,
+         final, seg, contracts, touch_count, last_contact_at, last_reply_at,
+         row_number() over (order by score desc, (final = '통과(검증)') desc, name) prio
+  from ln
+),
+u as (select * from mp union all select * from lnx)
+select u.*, (region_of(u.addr)).sido, (region_of(u.addr)).sigungu, ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
+from u left join lateral (
+  select meta, occurred_at from events e where e.lead_id = u.id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
+  order by occurred_at desc limit 1) ev on true;
+grant select on sheet_rows to anon, authenticated, service_role;
 
 -- 11. 프론트용: 열린 이슈 + 관련 리드 카드(json). 카드가 안 쓰는 필드·null은 빼서 응답을 가볍게.
 --     issue_leads가 있으면 그 순위·이유로, 없으면(아직 rank 전) related_lead_ids 순서로.
