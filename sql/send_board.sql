@@ -2,9 +2,9 @@
 create or replace function send_board() returns json language sql stable as $$
 with kst as (select (now() at time zone 'Asia/Seoul')::date as today),
 day0 as (select (today::timestamp at time zone 'Asia/Seoul') as t0 from kst),
-c as (select meta->>'sequence' s, (meta->>'step')::int st, count(distinct lead_id) sent
+c as (select meta->>'sequence' s, (case when meta->>'step' ~ '^[0-9]+$' then (meta->>'step')::int end) st, count(distinct lead_id) sent
       from events where type='contact' and meta->>'channel'='email' and meta ? 'sequence' and meta ? 'step' group by 1,2),
-o as (select meta->>'sequence' s, (meta->>'step')::int st, count(distinct lead_id) opened
+o as (select meta->>'sequence' s, (case when meta->>'step' ~ '^[0-9]+$' then (meta->>'step')::int end) st, count(distinct lead_id) opened
       from events where type='email_open' and meta ? 'sequence' and meta ? 'step' group by 1,2),
 r as (select sequence s, step-1 st, count(*) filter (where status='replied') replied, count(*) filter (where status='bounced') bounced from enrollments group by 1,2),
 w as (select sequence s, step st, count(*) filter (where status='active') waiting, count(*) filter (where status='paused') paused from enrollments group by 1,2),
@@ -13,7 +13,7 @@ a as (select e.sequence s, count(distinct ap.id) filter (where ap.status='approv
 p as (select distinct on (sequence) sequence s, plan from enrollments where plan is not null order by sequence, created_at desc),
 sched as (select to_char(next_send_at at time zone 'Asia/Seoul','YYYY-MM-DD') d, step, count(*) n
           from enrollments where status='active' and next_send_at < now() + interval '9 days' group by 1,2),
-td as (select coalesce(meta->>'sequence', 'other') s, coalesce((meta->>'step')::int, 0) st, count(*) n
+td as (select coalesce(meta->>'sequence', 'other') s, coalesce((case when meta->>'step' ~ '^[0-9]+$' then (meta->>'step')::int end), 0) st, count(*) n
        from events, day0 where type='contact' and meta->>'channel'='email' and occurred_at >= day0.t0 group by 1,2)
 select json_build_object(
   'now', now(),
