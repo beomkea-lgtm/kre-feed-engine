@@ -445,6 +445,8 @@ alter table broker_listings enable row level security;
 create or replace function name_core(n text) returns text language sql immutable as $fn$
   select regexp_replace(coalesce(n,''), '(공인중개사사무소|공인중개사무소|공인중개사|중개사사무소|중개사무소|부동산중개|중개법인|부동산|사무소|주식회사|\(주\)|㈜|\([^)]*\)|\s)', '', 'g')
 $fn$;
+create index if not exists leads_broker_core_idx on leads (name_core(name)) where type = 'broker';
+create index if not exists leads_broker_phone_idx on leads ((regexp_replace(coalesce(contact->>'phone',''), '\D', '', 'g'))) where type = 'broker';
 create or replace function import_listings(rows jsonb) returns json language plpgsql as $fn$
 declare r record; lid uuid; n_total int := 0; n_known int := 0; n_new int := 0;
 begin
