@@ -1,9 +1,7 @@
-import os, time, psycopg
-t=time.time()
-with psycopg.connect(os.environ["DATABASE_URL"], connect_timeout=20) as c:
-    for k,q in {"ping":"select 1","feed_open":"select count(*) from feed_open","map_leads":"select count(*) from map_leads",
-                "visit_warm":"select count(*) from visit_warm","conns":"select count(*) from pg_stat_activity",
-                "long":"select count(*) from pg_stat_activity where state='active' and now()-query_start > interval '30 seconds'"}.items():
-        try: v=c.execute(q).fetchone()[0]
-        except Exception as e: c.rollback(); v="ERR "+str(e)[:150]
-        print(f"::warning title={k}::{v} ({time.time()-t:.1f}s)")
+import os, psycopg
+with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+    for v in ("basket_rows","basket_counts"):
+        d = c.execute("select pg_get_viewdef(%s::regclass, true)", (v,)).fetchone()[0]
+        print(f"::warning title={v}::" + d.replace("\n"," ⏎ "))
+    for r in c.execute("select dependent_view.relname from pg_depend join pg_rewrite on pg_depend.objid=pg_rewrite.oid join pg_class dependent_view on pg_rewrite.ev_class=dependent_view.oid join pg_class source on pg_depend.refobjid=source.oid where source.relname in ('lead_cards','feed_open','kpi_weekly','basket_rows') and dependent_view.relname not in ('lead_cards','feed_open','kpi_weekly','basket_rows') group by 1").fetchall():
+        print(f"::warning title=dep::{r[0]}")
