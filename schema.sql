@@ -477,16 +477,111 @@ begin
   end loop;
   return json_build_object('total', n_total, 'known', n_known, 'new', n_new);
 end $fn$;
+
+-- 동네 거래량 (최근 30일 계약일 기준 매매). 시트 탭 '매물순'에서 거래 상위 동네 → 그 안에서 매물 많은 순으로 묶을 때 쓴다. 잡이 schema.sql을 적용할 때마다 새로 계산.
+create or replace function addr_dong(addr text) returns text language sql immutable as $fn$
+  select coalesce(
+    substring(coalesce(addr,'') from '\(([가-힣]+[0-9]*(?:동|가))[,\s)]'),
+    (select regexp_replace(t, '[,()]', '', 'g') from regexp_split_to_table(coalesce(addr,''), '\s+') with ordinality as x(t, i)
+      where i > 1 and regexp_replace(t, '[,()]', '', 'g') ~ '^[가-힣]+[0-9]*(동|읍|면|가)$' and regexp_replace(t, '[,()]', '', 'g') !~ '(상가동|단지동|아파트동)$'
+      order by i limit 1))
+$fn$;
+drop materialized view if exists dong_heat;
+create materialized view dong_heat as
+with names(sgg_cd, sgg_name) as (values
+  ('11110','종로구'),
+  ('11140','중구'),
+  ('11170','용산구'),
+  ('11200','성동구'),
+  ('11215','광진구'),
+  ('11230','동대문구'),
+  ('11260','중랑구'),
+  ('11290','성북구'),
+  ('11305','강북구'),
+  ('11320','도봉구'),
+  ('11350','노원구'),
+  ('11380','은평구'),
+  ('11410','서대문구'),
+  ('11440','마포구'),
+  ('11470','양천구'),
+  ('11500','강서구'),
+  ('11530','구로구'),
+  ('11545','금천구'),
+  ('11560','영등포구'),
+  ('11590','동작구'),
+  ('11620','관악구'),
+  ('11650','서초구'),
+  ('11680','강남구'),
+  ('11710','송파구'),
+  ('11740','강동구'),
+  ('41111','수원시 장안구'),
+  ('41113','수원시 권선구'),
+  ('41115','수원시 팔달구'),
+  ('41117','수원시 영통구'),
+  ('41131','성남시 수정구'),
+  ('41133','성남시 중원구'),
+  ('41135','성남시 분당구'),
+  ('41150','의정부시'),
+  ('41171','안양시 만안구'),
+  ('41173','안양시 동안구'),
+  ('41192','부천시 원미구'),
+  ('41194','부천시 소사구'),
+  ('41196','부천시 오정구'),
+  ('41210','광명시'),
+  ('41220','평택시'),
+  ('41250','동두천시'),
+  ('41271','안산시 상록구'),
+  ('41273','안산시 단원구'),
+  ('41281','고양시 덕양구'),
+  ('41285','고양시 일산동구'),
+  ('41287','고양시 일산서구'),
+  ('41290','과천시'),
+  ('41310','구리시'),
+  ('41360','남양주시'),
+  ('41370','오산시'),
+  ('41390','시흥시'),
+  ('41410','군포시'),
+  ('41430','의왕시'),
+  ('41450','하남시'),
+  ('41461','용인시 처인구'),
+  ('41463','용인시 기흥구'),
+  ('41465','용인시 수지구'),
+  ('41480','파주시'),
+  ('41500','이천시'),
+  ('41550','안성시'),
+  ('41570','김포시'),
+  ('41591','화성시 만세구'),
+  ('41593','화성시 효행구'),
+  ('41595','화성시 병점구'),
+  ('41597','화성시 동탄구'),
+  ('41610','광주시'),
+  ('41630','양주시'),
+  ('41650','포천시'),
+  ('41670','여주시'),
+  ('41800','연천군'),
+  ('41820','가평군'),
+  ('41830','양평군')
+)
+select case left(t.sgg_cd, 2) when '11' then '서울' when '41' then '경기' else '' end as sido,
+       split_part(nm.sgg_name, ' ', 1) as city, nm.sgg_name, split_part(t.umd_nm, ' ', 1) as dong,
+       count(*) as n30, count(*) filter (where t.prop_type = 'apt') as apt30
+from rt_trades t join names nm on nm.sgg_cd = t.sgg_cd
+where not t.cancel_flag and t.deal_date >= current_date - 30
+group by 1, 2, 3, 4;
+create index if not exists dong_heat_idx on dong_heat (sido, city, dong);
 create view listing_rows as
 select b.reg_key, b.reg_no, b.name, b.phone, b.email, b.listings, b.addr, b.lead_id as id, b.imported_at,
-       (region_of(b.addr)).sido, (region_of(b.addr)).sigungu,
+       (region_of(b.addr)).sido, (region_of(b.addr)).sigungu, addr_dong(b.addr) as dong,
+       h.n30 as dong_n30, h.sgg_name as dong_sgg,
        row_number() over (order by b.listings desc nulls last, b.name) as prio,
        exists (select 1 from map_leads m where m.id = b.lead_id) as on_map,
        (select count(*) from events e where e.lead_id = b.lead_id and e.type = 'contact') as touch_count,
        ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
 from broker_listings b
 left join lateral (select meta, occurred_at from events e where e.lead_id = b.lead_id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
-                   order by occurred_at desc limit 1) ev on true;
+                   order by occurred_at desc limit 1) ev on true
+left join lateral (select n30, sgg_name from dong_heat h where h.sido = (region_of(b.addr)).sido and h.city = split_part((region_of(b.addr)).sigungu, ' ', 1)
+                   and h.dong = addr_dong(b.addr) order by n30 desc limit 1) h on true;
 grant select on listing_rows to anon, authenticated, service_role;
 
 -- 11. 프론트용: 열린 이슈 + 관련 리드 카드(json). 카드가 안 쓰는 필드·null은 빼서 응답을 가볍게.
