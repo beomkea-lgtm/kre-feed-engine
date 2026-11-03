@@ -9,10 +9,11 @@ jobs:
     timeout-minutes: 5
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q "psycopg[binary]"
+      - run: pip install -q "psycopg[binary]" requests
       - run: python .github/diag/gangseo.py
