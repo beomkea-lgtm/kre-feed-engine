@@ -480,11 +480,9 @@ end $fn$;
 
 -- 동네 거래량 (최근 30일 계약일 기준 매매). 시트 탭 '매물순'에서 거래 상위 동네 → 그 안에서 매물 많은 순으로 묶을 때 쓴다. 잡이 schema.sql을 적용할 때마다 새로 계산.
 create or replace function addr_dong(addr text) returns text language sql immutable as $fn$
-  select coalesce(
-    substring(coalesce(addr,'') from '\(([가-힣]+[0-9]*(?:동|가))[,\s)]'),
-    (select regexp_replace(t, '[,()]', '', 'g') from regexp_split_to_table(coalesce(addr,''), '\s+') with ordinality as x(t, i)
-      where i > 1 and regexp_replace(t, '[,()]', '', 'g') ~ '^[가-힣]+[0-9]*(동|읍|면|가)$' and regexp_replace(t, '[,()]', '', 'g') !~ '(상가동|단지동|아파트동)$'
-      order by i limit 1))
+  select nullif(regexp_replace(coalesce(
+    substring(coalesce(addr,'') from '\(([가-힣]+[0-9]*동)[,.\s)]'),
+    substring(coalesce(addr,'') from '(?:^|\s|,)([가-힣]+[0-9]*(?:동|읍|면))[0-9-]*(?=\s|,|$)')), '^.*(상가동|단지동|아파트동|관리동)$', ''), '')
 $fn$;
 drop materialized view if exists dong_heat;
 create materialized view dong_heat as
@@ -571,17 +569,18 @@ group by 1, 2, 3, 4;
 create index if not exists dong_heat_idx on dong_heat (sido, city, dong);
 create view listing_rows as
 select b.reg_key, b.reg_no, b.name, b.phone, b.email, b.listings, b.addr, b.lead_id as id, b.imported_at,
-       (region_of(b.addr)).sido, (region_of(b.addr)).sigungu, addr_dong(b.addr) as dong,
+       (region_of(b.addr)).sido, (region_of(b.addr)).sigungu, coalesce(addr_dong(b.addr), nullif(split_part(ld.region_key, '|', 2), '')) as dong,
        h.n30 as dong_n30, h.sgg_name as dong_sgg,
        row_number() over (order by b.listings desc nulls last, b.name) as prio,
        exists (select 1 from map_leads m where m.id = b.lead_id) as on_map,
        (select count(*) from events e where e.lead_id = b.lead_id and e.type = 'contact') as touch_count,
        ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
 from broker_listings b
+left join leads ld on ld.id = b.lead_id
 left join lateral (select meta, occurred_at from events e where e.lead_id = b.lead_id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
                    order by occurred_at desc limit 1) ev on true
 left join lateral (select n30, sgg_name from dong_heat h where h.sido = (region_of(b.addr)).sido and h.city = split_part((region_of(b.addr)).sigungu, ' ', 1)
-                   and h.dong = addr_dong(b.addr) order by n30 desc limit 1) h on true;
+                   and h.dong = coalesce(addr_dong(b.addr), nullif(split_part(ld.region_key, '|', 2), '')) order by n30 desc limit 1) h on true;
 grant select on listing_rows to anon, authenticated, service_role;
 
 -- 11. 프론트용: 열린 이슈 + 관련 리드 카드(json). 카드가 안 쓰는 필드·null은 빼서 응답을 가볍게.
