@@ -1,32 +1,31 @@
-import os, re, requests, psycopg, json
-K = os.environ.get("KAKAO_REST_KEY", "")
-NID, NSEC = os.environ.get("NAVER_CLIENT_ID", ""), os.environ.get("NAVER_CLIENT_SECRET", "")
-T = [("곰돌이공인중개사사무소", "송파구 석촌동", "백제고분로39길 18"),
-     ("초록공인중개사사무소", "분당구 서현동", "중앙공원로40번길 42"),
-     ("역세권공인중개사사무소", "안성시 공도읍", "용머리큰길 31-45"),
-     ("케이파트너스부동산중개법인", "마포구 서교동", "성미산로2길 33")]
-def core(n): return re.sub(r"(공인중개사사무소|부동산중개법인|주식회사|\s)", "", n)
+import os, psycopg, json
+Q = """
+with a as (select id, lead_id, org, decided_at, first_post_url from applications where status='approved' and merged_into is null and lead_id is not null),
+k as (select lead_id, min(occurred_at) t from events where type='contact' and meta->>'sequence'='partner_kickoff' group by 1),
+n as (select lead_id, array_agg(distinct (meta->>'step') order by (meta->>'step')) steps from events where type='contact' and meta->>'sequence'='partner_nudge' group by 1),
+r as (select distinct e.lead_id from events e join k on k.lead_id=e.lead_id where e.type='reply' and e.occurred_at > k.t),
+h as (select coalesce((select value::jsonb from app_state where key='nudge_hold'),'[]'::jsonb) v)
+select a.org, to_char(a.decided_at at time zone 'Asia/Seoul','MM-DD') dec, (current_date - (a.decided_at at time zone 'Asia/Seoul')::date) age,
+  k.t is not null kicked, coalesce(array_to_string(n.steps,','),'') steps, a.first_post_url is not null posted, r.lead_id is not null replied,
+  (select v ? a.id::text from h) held
+from a left join k on k.lead_id=a.lead_id left join n on n.lead_id=a.lead_id left join r on r.lead_id=a.lead_id
+order by a.decided_at"""
 with psycopg.connect(os.environ["DATABASE_URL"]) as c:
-    for name, area, road in T:
-        out = []
-        try:
-            r = requests.get("https://dapi.kakao.com/v2/local/search/keyword.json", params={"query": f"{area} {core(name)}", "size": 5},
-                             headers={"Authorization": f"KakaoAK {K}"}, timeout=20).json()
-            for d in r.get("documents", []):
-                if core(name) in d.get("place_name", "").replace(" ", ""):
-                    out.append(f"카카오 {d.get('place_name')} {d.get('phone') or '(번호없음)'} {d.get('road_address_name')}")
-        except Exception as e:
-            out.append(f"kakao ERR {e}")
-        try:
-            r = requests.get("https://openapi.naver.com/v1/search/local.json", params={"query": f"{area} {core(name)}", "display": 5},
-                             headers={"X-Naver-Client-Id": NID, "X-Naver-Client-Secret": NSEC}, timeout=20).json()
-            for it in r.get("items", []):
-                t = re.sub("<[^>]+>", "", it.get("title", ""))
-                if core(name) in t.replace(" ", ""):
-                    out.append(f"네이버 {t} {it.get('telephone') or '(번호없음)'} {it.get('roadAddress')}")
-        except Exception as e:
-            out.append(f"naver ERR {e}")
-        rows = c.execute("select name, contact->>'phone', contact->>'address' from leads where type='broker' and name_core(name)=name_core(%s) and contact->>'address' like %s limit 3",
-                         (name, "%" + area.split()[0] + "%")).fetchall()
-        out += [f"DB {a} {b} {d}" for a, b, d in rows]
-        print(f"::warning title={name}::" + (" || ".join(out) or "없음"))
+    rows = c.execute(Q).fetchall()
+from collections import Counter
+cat = Counter(); det = {}
+for org, dec, age, kicked, steps, posted, replied, held in rows:
+    s = set(steps.split(",")) - {""}
+    if s >= {"0","1","2"}: k = "3회 완료"
+    elif posted: k = "첫 글 올려서 중단"
+    elif replied: k = "회신 와서 끔"
+    elif held: k = "보류(nudge_hold)"
+    elif not kicked: k = "안내 메일 전"
+    elif age <= 8: k = "진행 중"
+    else: k = "기간 지남(누락)"
+    cat[k] += 1
+    det.setdefault(k, []).append(f"{org[:14]}({dec},D+{age},보낸회차[{steps}])")
+print("::warning title=total::" + str(len(rows)) + " " + json.dumps(cat, ensure_ascii=False))
+for k, v in det.items():
+    if k != "3회 완료":
+        print(f"::warning title={k}::" + " | ".join(v)[:1800])
