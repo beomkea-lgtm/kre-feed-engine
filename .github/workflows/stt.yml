@@ -1,0 +1,48 @@
+name: stt
+on:
+  push:
+    branches: [main]
+    paths: [".trigger-stt"]
+permissions:
+  contents: write
+jobs:
+  stt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q "psycopg[binary]" faster-whisper
+      - name: decrypt audio (pass from DB)
+        run: |
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+              v = c.execute("select value from app_state where key='stt_pass'").fetchone()[0]
+          open(os.environ["RUNNER_TEMP"] + "/p.txt", "w").write(v.strip())
+          PY
+          openssl enc -d -aes-256-cbc -pbkdf2 -in stt/meet.opus.enc -out "$RUNNER_TEMP/meet.opus" -pass file:"$RUNNER_TEMP/p.txt"
+          rm -f "$RUNNER_TEMP/p.txt"
+      - name: transcribe
+        run: python .github/stt.py "$RUNNER_TEMP/meet.opus" "$RUNNER_TEMP/stt.txt"
+      - name: encrypt transcript, remove audio, clear pass
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/stt.txt" ]; then
+            openssl rand -out "$RUNNER_TEMP/k.bin" 32
+            openssl enc -aes-256-cbc -pbkdf2 -salt -in "$RUNNER_TEMP/stt.txt" -out exports/stt.txt.enc -pass file:"$RUNNER_TEMP/k.bin"
+            openssl pkeyutl -encrypt -pubin -inkey .github/export_pub.pem -in "$RUNNER_TEMP/k.bin" -out exports/stt.key.enc
+            git add exports/stt.txt.enc exports/stt.key.enc
+          fi
+          git rm -q --cached stt/meet.opus.enc || true
+          python - <<'PY'
+          import os, psycopg
+          with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as c:
+              c.execute("delete from app_state where key='stt_pass'")
+          PY
+          git config user.name "kre-feed bot"; git config user.email "bot@users.noreply.github.com"
+          git commit -m "stt (encrypted transcript)" && git push
