@@ -447,6 +447,23 @@ create or replace function name_core(n text) returns text language sql immutable
 $fn$;
 create index if not exists leads_broker_core_idx on leads (name_core(name)) where type = 'broker';
 create index if not exists leads_broker_phone_idx on leads ((regexp_replace(coalesce(contact->>'phone',''), '\D', '', 'g'))) where type = 'broker';
+-- 여러 업체에 똑같이 붙은 메일(홈페이지 제작사·플랫폼 고객센터 등)은 그 업체 메일이 아니다 → 떼어 내고 진행 중 시퀀스 멈춤.
+-- 기준: 서로 다른 상호 5곳 이상, 또는 3곳 이상인데 업종이 2가지 이상. 떼어 낸 주소는 contact.email_shared 에 남긴다. 매일 cron.
+create or replace function clean_shared_emails() returns json language plpgsql as $fn$
+declare n_leads int; n_enr int;
+begin
+  create temp table _bad on commit drop as
+    select lower(contact->>'email') em from leads where coalesce(contact->>'email','') <> ''
+    group by 1 having count(distinct name_core(name)) >= 5 or (count(distinct name_core(name)) >= 3 and count(distinct type) >= 2);
+  update enrollments e set status = 'stopped' from leads l
+   where l.id = e.lead_id and e.status = 'active' and lower(l.contact->>'email') in (select em from _bad);
+  get diagnostics n_enr = row_count;
+  update leads set contact = (contact - 'email') || jsonb_build_object('email_shared', contact->>'email'), updated_at = now()
+   where lower(contact->>'email') in (select em from _bad);
+  get diagnostics n_leads = row_count;
+  return json_build_object('emails', (select count(*) from _bad), 'leads', n_leads, 'stopped', n_enr);
+end $fn$;
+
 create or replace function import_listings(rows jsonb) returns json language plpgsql as $fn$
 declare r record; lid uuid; n_total int := 0; n_known int := 0; n_new int := 0;
 begin
