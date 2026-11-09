@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q "psycopg[binary]" faster-whisper
+      - run: pip install -q "psycopg[binary]" faster-whisper "av==13.1.0"
       - name: decrypt audio (pass from DB)
         run: |
           python - <<'PY'
@@ -38,11 +38,13 @@ jobs:
             openssl pkeyutl -encrypt -pubin -inkey .github/export_pub.pem -in "$RUNNER_TEMP/k.bin" -out exports/stt.key.enc
             git add exports/stt.txt.enc exports/stt.key.enc
           fi
-          git rm -q --cached stt/meet.opus.enc || true
-          python - <<'PY'
+          if [ -f "$RUNNER_TEMP/stt.txt" ]; then
+            git rm -q --cached stt/meet.opus.enc || true
+            python - <<'PY'
           import os, psycopg
           with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as c:
               c.execute("delete from app_state where key='stt_pass'")
           PY
+          fi
           git config user.name "kre-feed bot"; git config user.email "bot@users.noreply.github.com"
-          git commit -m "stt (encrypted transcript)" && git push
+          git commit -m "stt (encrypted transcript)" && git push || true
