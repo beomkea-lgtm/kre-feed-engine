@@ -40,6 +40,10 @@ BRANDS = ("한샘", "LX지인", "LX하우시스", "리바트", "집테리어", "
           "홈케어2424", "예스2404", "YES2404", "이사이사", "대한익스프레스", "현대이사몰", "아트이사몰", "굿데이이사몰",
           "이사친구", "국민골든팩", "청소연구소", "미소", "에몬스", "까사미아", "이케아", "도배나라", "도배청년단", "다한다")
 
+# 상호가 겹쳐 엉뚱한 사업장에 붙은 매칭·자재상(도소매)은 버린다 (2026-11-18 첫 실행 업종 분포 보고)
+IND_BLOCK = ("소프트웨어", "광고", "시각 디자인", "컨설팅", "전시", "간판", "출판", "교육", "음식", "의원", "병원", "부동산", "금융",
+             "보험", "도매", "소매", "제조업", "엔지니어링", "프로그래밍", "정보", "연구", "학원", "협회", "종교")
+
 NPS_PK = "15083277"
 DATA_GO = "https://www.data.go.kr"
 
@@ -260,6 +264,9 @@ def score_all(conn: psycopg.Connection, nps: dict[str, dict] | None) -> dict:
             score -= 20
         brand = brand_of(name, l["kcat"])
         n = nps.get(l["id"]) if nps is not None else l["prev"]
+        if n and any(b in (n.get("ind") or "") for b in IND_BLOCK) and "가구 제조" not in (n.get("ind") or ""):
+            stats["ind_block"] += 1
+            n = None
         extra: dict = {}
         if n:
             m = n["members"]
@@ -307,7 +314,7 @@ PLATFORM_TIER = [
     (200, ("숨고", "모두연결", "미소", "대리주부")),
     (150, ("클린벨", "청소연구소", "청연", "클린베테랑", "청소")),
     (100, ("렌트리", "가전나우", "렌탈", "가전")),
-    (50, ("헬로입주", "채들", "홈체크", "하자렌즈", "아이체크", "사전점검", "하자")),
+    (50, ("헬로입주", "채들", "홈체크", "하자렌즈", "아이체크", "사전점검", "하자", "아파트너", "아파트아이")),   # 신축 입주·관리앱: 분양이거나 잔금 뒤라 늦음
 ]
 HOME_CATS = ("이사", "인테리어", "입주", "청소", "홈서비스", "가전", "렌탈", "하자", "프랜차이즈")
 
@@ -319,7 +326,8 @@ def tag_platforms(conn: psycopg.Connection) -> int:
         cat = cat or ""
         if not any(k in cat for k in HOME_CATS) or "코리빙" in cat or "1인가구" in cat:
             continue
-        sc = next((s for s, keys in PLATFORM_TIER if any(k in (name or "") for k in keys)), None)
+        low = PLATFORM_TIER[-1]
+        sc = low[0] if any(k in (name or "") for k in low[1]) else next((s for s, keys in PLATFORM_TIER if any(k in (name or "") for k in keys)), None)
         if sc is None:
             sc = next((s for s, keys in PLATFORM_TIER if any(k in cat for k in keys)), 100)
         conn.execute("""update leads set score = %s, contact = coalesce(contact,'{}'::jsonb) || '{"home_platform": true}'::jsonb
@@ -327,6 +335,40 @@ def tag_platforms(conn: psycopg.Connection) -> int:
         n += 1
     conn.commit()
     log.info("이사·인테리어 플랫폼 %d곳 → home 탭", n)
+    return n
+
+
+def fill_phones(conn: psycopg.Connection) -> int:
+    """대표번호가 없는 이사·인테리어 플랫폼·본사 → 카카오 장소 검색으로 본사·본점 번호 (15xx·16xx·18xx 대표번호 우선)."""
+    import os
+    h = {"Authorization": f"KakaoAK {os.environ['KAKAO_REST_KEY']}"}
+    rows = conn.execute("""select id, name from leads where type = 'platform' and contact->>'home_platform' = 'true'
+                           and coalesce(contact->>'phone', '') = ''""").fetchall()
+    n = 0
+    for lid, name in rows:
+        core = re.sub(r"\s*\(.*?\)\s*", " ", name or "").strip()
+        alt = re.findall(r"\(([^)]+)\)", name or "")
+        best = None
+        for q in [core] + [a for a in alt if len(a) >= 2]:
+            try:
+                docs = requests.get("https://dapi.kakao.com/v2/local/search/keyword.json", headers=h,
+                                    params={"query": q, "size": 15}, timeout=10).json().get("documents", [])
+            except Exception:
+                continue
+            cands = [d for d in docs if d.get("phone") and norm(q.split()[0]) in norm(d["place_name"])]
+            if not cands:
+                continue
+            def rank(d):
+                pn, ph = d["place_name"], d["phone"]
+                return (("본사" in pn or "본점" in pn), ph.startswith(("15", "16", "18", "080")), -len(pn))
+            best = max(cands, key=rank)
+            break
+        if best:
+            conn.execute("""update leads set contact = contact || jsonb_build_object('phone', %s::text, 'phone_src', %s::text) where id = %s""",
+                         (best["phone"], "kakao:" + best["place_name"], lid))
+            n += 1
+    conn.commit()
+    log.info("플랫폼·본사 대표번호 채움 %d / %d", n, len(rows))
     return n
 
 
@@ -414,6 +456,10 @@ def summary(conn: psycopg.Connection) -> None:
 
 def run_home(conn: psycopg.Connection, nps_file: str | None = None) -> dict:
     tag_platforms(conn)
+    try:
+        fill_phones(conn)
+    except Exception as e:
+        log.warning("대표번호 채우기 건너뜀: %s", str(e)[:200])
     seed_sequence(conn)
     nps = None
     path = Path(nps_file) if nps_file else Path("/tmp/nps.csv")

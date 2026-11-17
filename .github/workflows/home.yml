@@ -39,17 +39,22 @@ jobs:
           bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
           echo $! > "$RUNNER_TEMP/logloop.pid"
           {
-            echo "### 1. 카카오 수집 (인테리어·포장이사·입주청소, 서울·경기)"
-            python -m kre_feed sweep interior,moving,clean 40000
+            T="$(cat .trigger-home)"
+            if [[ "$T" != *skip_sweep* ]]; then
+              echo "### 1. 카카오 수집 (인테리어·포장이사·입주청소, 서울·경기)"
+              python -m kre_feed sweep interior,moving,clean 40000
+            fi
             if ls imports/home_*.csv >/dev/null 2>&1; then
               echo "### 2. 플랫폼·프랜차이즈 본사"
               python -m kre_feed import-home imports/home_*.csv
             fi
             echo "### 3. 국민연금 체급 + 점수"
             python -m kre_feed home
+            if [[ "$T" != *skip_emails* ]]; then
             echo "### 4. 체급 상위 메일 찾기"
-            EMAIL_FOCUS='["interior","moving","clean","platform"]' EMAIL_DAILY_LEADS=2500 EMAIL_PAGE_BUDGET=8000 EMAIL_DAILY_REGIONS=0 \
+            EMAIL_FOCUS='["platform","interior","moving","clean"]' EMAIL_DAILY_LEADS=2500 EMAIL_PAGE_BUDGET=8000 EMAIL_DAILY_REGIONS=0 \
               python -m kre_feed emails
+            fi
             echo "### 5. 결과"
             python -c "import os, logging; logging.basicConfig(level=logging.INFO); from kre_feed.db import connect; from kre_feed.home import summary; summary(connect(os.environ['DATABASE_URL']))"
           } 2>&1 | tee "$RUNNER_TEMP/run.log"
