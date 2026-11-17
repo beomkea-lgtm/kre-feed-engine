@@ -429,8 +429,25 @@ lnx as (
          row_number() over (order by score desc, (final = '통과(검증)') desc, name) prio
   from ln
 ),
-u as (select * from mp union all select * from lnx)
-select u.*, (region_of(u.addr)).sido, (region_of(u.addr)).sigungu, ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
+hm as (   -- 이사·인테리어: 플랫폼 + 체급(국민연금) 통과 지역 업체, 점수순 (home.py)
+  select 'home'::text kind, l.id, l.name, l.contact->>'phone' phone,
+         coalesce(nullif(l.contact->>'email', ''), lc.email_candidate) email, l.contact->>'address' addr,
+         case when l.type = 'platform' then null else l.contact->>'url' end url,
+         case when l.type = 'platform' then l.contact->>'url' end homepage,
+         null::int best_rank, 0::bigint n_issues, round(l.score)::int score,
+         case when l.type = 'platform' then '플랫폼 · ' || coalesce(l.contact->>'category', '')
+              else coalesce(case l.type when 'interior' then '인테리어' when 'moving' then '포장이사' when 'clean' then '입주청소' end, '') end headline,
+         l.contact->>'note' why, null::text final, null::text seg, null::text contracts, lc.touch_count, lc.last_contact_at, lc.last_reply_at,
+         row_number() over (order by l.score desc nulls last, l.name) prio
+  from leads l left join lead_cards lc on lc.id = l.id
+  where ((l.type in ('interior','moving','clean') and l.contact->>'home_top' = 'true')
+         or (l.type = 'platform' and l.contact->>'home_platform' = 'true'))
+    and l.status <> 'rejected'
+),
+u as (select * from mp union all select * from lnx union all select * from hm)
+select u.kind, u.id, u.name, u.phone, u.email, u.addr, u.url, u.homepage, u.best_rank, u.n_issues, u.score, u.headline, u.why,
+       u.final, u.seg, u.contracts, u.touch_count, u.last_contact_at, u.last_reply_at, u.prio,
+       coalesce((region_of(u.addr)).sido, case when u.kind = 'home' then '전국' end) sido, (region_of(u.addr)).sigungu, ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
 from u left join lateral (
   select meta, occurred_at from events e where e.lead_id = u.id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
   order by occurred_at desc limit 1) ev on true;

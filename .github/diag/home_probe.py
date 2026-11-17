@@ -1,24 +1,9 @@
-import re, requests
-S = requests.Session(); S.headers["User-Agent"] = "Mozilla/5.0"
-B = "https://www.data.go.kr"
-t = S.get(B + "/data/15083277/fileData.do", timeout=30).text
-js = re.findall(r'<script[^>]+src="([^"]+)"', t)
-for src in js:
-    if "file" in src.lower() or "detail" in src.lower() or "dss" in src.lower():
-        u = src if src.startswith("http") else B + src
-        try:
-            body = S.get(u, timeout=20).text
-        except Exception:
-            continue
-        i = body.find("fn_fileDataDown")
-        if i >= 0:
-            print("== js", src); print(body[i:i+2500].replace("\n", " "))
-            break
-i = t.find("fn_fileDataDown")
-for m in re.finditer(r"fn_fileDataDown\s*[:=(]\s*function|fn_fileDataDown\s*:\s*\(", t):
-    print("== inline", t[m.start():m.start()+2500].replace("\n", " "))
-try:
-    r = S.post(B + "/tcs/dss/selectFileDataDownload.do", data={"publicDataPk": "15083277", "publicDataDetailPk": "uddi:4f8f48cf-344b-471f-b7f2-c2aa98c210a7", "fileDetailSn": "1"}, timeout=30)
-    print("== selectFileDataDownload", r.status_code, r.text[:600])
-except Exception as e:
-    print("== ERR", e)
+"""이사·인테리어 시트 반영 확인 (집계만 출력 — 연락처 값은 찍지 않음)."""
+import os, psycopg
+with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+    print("== sheet_rows home", c.execute("""select count(*), count(*) filter (where coalesce(email,'')<>''), count(*) filter (where coalesce(phone,'')<>''),
+          count(*) filter (where headline like '플랫폼%%') from sheet_rows where kind='home'""").fetchone())
+    print("== 상위 30 (이름·점수·근거)")
+    for r in c.execute("select prio, name, score, headline, why, coalesce(phone,'')<>'', coalesce(email,'')<>'' from sheet_rows where kind='home' order by prio limit 30"):
+        print("  ", r)
+    print("== 시도", c.execute("select sido, count(*) from sheet_rows where kind='home' group by 1 order by 2 desc").fetchall())

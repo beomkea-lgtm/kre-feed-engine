@@ -18,5 +18,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -q "psycopg[binary]" requests
+      - run: pip install -q -r requirements.txt
+      - run: python -m kre_feed init-db
       - run: python .github/diag/home_probe.py
