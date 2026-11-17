@@ -19,4 +19,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -q "psycopg[binary]" requests
-      - run: python .github/diag/gangseo.py
+      - run: python .github/diag/home_probe.py
