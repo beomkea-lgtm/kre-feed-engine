@@ -31,6 +31,9 @@ CEO_STOP = {"번호", "전화", "이메일", "메일", "상담", "문의", "주�
             "님이세요", "인사드", "소개", "약력", "취임", "직속", "명의", "직함", "성명"}
 
 
+FREE_MAIL = {"naver.com", "hanmail.net", "daum.net", "gmail.com", "nate.com", "kakao.com", "hotmail.com", "outlook.com", "korea.com", "empas.com"}
+
+
 def _tidy(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s or "")
 
@@ -145,6 +148,11 @@ def run() -> dict:
                         e = mm.group(0).strip(".").lower()
                         # 상호 근처(앞뒤 300자)에 있고 메일 맥락이 있어야 — 다른 회사 주소를 붙이지 않게
                         near = txt[max(0, mm.start() - 300): mm.end() + 300].replace(" ", "")
+                        ed = e.split("@")[1]
+                        # 무료메일(대표 개인 메일) 이거나, 그 회사 자기 도메인 메일만 — 채용·연구·법무 사이트 등 남의 회사 주소 차단
+                        own_ok = bool(own_domain(pu)) and not AGG.search(pu.lower()) and (ed == own_domain(pu) or ed.endswith("." + (own_domain(pu) or "")))
+                        if not (ed in FREE_MAIL or own_ok):
+                            continue
                         if plausible(e) and core in near and _context(low, mm.start(), mm.end()) and e not in [f[0] for f in found]:
                             found.append((e, pu))
             if found:

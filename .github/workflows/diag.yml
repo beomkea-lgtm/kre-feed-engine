@@ -20,4 +20,4 @@ jobs:
           python-version: "3.12"
       - run: pip install -q -r requirements.txt
       - run: python -m kre_feed init-db
-      - run: python .github/diag/home_probe.py
+      - run: python .github/diag/run.py
