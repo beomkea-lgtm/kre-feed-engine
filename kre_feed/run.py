@@ -56,7 +56,7 @@ def cmd_status(conn) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="kre_feed")
-    p.add_argument("command", choices=["init-db", "collect", "aggregate", "issues", "send", "enrich", "places", "emails", "rank", "listings", "daily", "status", "enroll", "lookup", "export-top", "import-emails", "import-platforms", "influencers", "creators", "sweep"])
+    p.add_argument("command", choices=["init-db", "collect", "aggregate", "issues", "send", "enrich", "places", "emails", "rank", "listings", "daily", "status", "enroll", "lookup", "export-top", "import-emails", "import-platforms", "influencers", "creators", "sweep", "home", "import-home"])
     p.add_argument("args", nargs="*")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="send: 실제 발송 없이 로그만")
@@ -135,6 +135,14 @@ def main(argv: list[str] | None = None) -> int:
             if not settings.kakao_rest_key:
                 raise SystemExit("KAKAO_REST_KEY 없음")
             print(run_sweep(conn, settings.kakao_rest_key, kinds, budget))
+        elif a.command == "home":
+            # 이사·인테리어 탭: 국민연금 체급 매칭 + 점수 + 플랫폼 태그.  python -m kre_feed home [국민연금 csv 경로]
+            from .home import run_home
+            print(run_home(conn, a.args[0] if a.args else None))
+        elif a.command == "import-home":
+            from .home import import_home_csv
+            for f in a.args:
+                print(import_home_csv(conn, f))
         elif a.command == "rank":
             print(run_rank(conn, settings, rerank_all=a.all))
         elif a.command == "listings":

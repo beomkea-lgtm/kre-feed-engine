@@ -218,7 +218,7 @@ def rank_issue(conn: psycopg.Connection, s: Settings, issue: dict) -> list[Score
     leads = conn.execute(
         """
         select id, name, contact->>'address', lat, lng, score, blog_total, listing_count, blog_src, type
-        from leads where region_key = %s and status <> 'rejected' and coalesce(type, '') <> 'legal'   -- 법무사는 제휴 대상에서 뺌 (2026-10-30)
+        from leads where region_key = %s and status <> 'rejected' and coalesce(type, '') not in ('legal', 'interior', 'moving', 'clean')   -- 법무사는 제휴 대상에서 뺌 (2026-10-30) · 이사·인테리어는 파이프라인 탭 전용
         """,
         (region_key,),
     ).fetchall()

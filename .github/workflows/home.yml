@@ -1,0 +1,60 @@
+name: kre-feed home (이사·인테리어)
+
+# 이사·인테리어 탭: 카카오 전수 수집(인테리어·포장이사·입주청소) → 국민연금 체급 매칭·점수 → 상위만 메일 찾기
+# .trigger-home push 로 실행. 국민연금 파일은 월 1회 갱신이라 매일 돌릴 필요 없음.
+on:
+  push:
+    branches: [main]
+    paths: [".trigger-home"]
+  workflow_dispatch:
+
+concurrency:
+  group: kre-feed-home
+  cancel-in-progress: false
+
+jobs:
+  home:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+      NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+      NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+      NAVER_CLIENT_ID_2: ${{ secrets.NAVER_CLIENT_ID_2 }}
+      NAVER_CLIENT_SECRET_2: ${{ secrets.NAVER_CLIENT_SECRET_2 }}
+      LOG_NAME: home
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q -r requirements.txt
+      - name: init schema
+        run: python -m kre_feed init-db
+      - name: run
+        run: |
+          set -o pipefail
+          : > "$RUNNER_TEMP/run.log"
+          bash .github/push_log.sh loop "$RUNNER_TEMP/run.log" &
+          echo $! > "$RUNNER_TEMP/logloop.pid"
+          {
+            echo "### 1. 카카오 수집 (인테리어·포장이사·입주청소, 서울·경기)"
+            python -m kre_feed sweep interior,moving,clean 40000
+            if ls imports/home_*.csv >/dev/null 2>&1; then
+              echo "### 2. 플랫폼·프랜차이즈 본사"
+              python -m kre_feed import-home imports/home_*.csv
+            fi
+            echo "### 3. 국민연금 체급 + 점수"
+            python -m kre_feed home
+            echo "### 4. 체급 상위 메일 찾기"
+            EMAIL_FOCUS='["interior","moving","clean","platform"]' EMAIL_DAILY_LEADS=2500 EMAIL_PAGE_BUDGET=8000 EMAIL_DAILY_REGIONS=0 \
+              python -m kre_feed emails
+            echo "### 5. 결과"
+            python -c "import os, logging; logging.basicConfig(level=logging.INFO); from kre_feed.db import connect; from kre_feed.home import summary; summary(connect(os.environ['DATABASE_URL']))"
+          } 2>&1 | tee "$RUNNER_TEMP/run.log"
+      - name: save log
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/logloop.pid" 2>/dev/null)" 2>/dev/null || true
+          bash .github/push_log.sh once "$RUNNER_TEMP/run.log" "${{ job.status }}"

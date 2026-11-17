@@ -170,7 +170,7 @@ def expire_issues(conn: psycopg.Connection) -> int:
 
 def related_leads(conn: psycopg.Connection, region_key: str, limit: int) -> list[str]:
     rows = conn.execute(
-        "select id from leads where region_key = %s and status <> 'rejected' "
+        "select id from leads where region_key = %s and status <> 'rejected' and coalesce(type, '') not in ('interior', 'moving', 'clean') "
         "order by score desc nulls last limit %s",
         (region_key, limit),
     ).fetchall()

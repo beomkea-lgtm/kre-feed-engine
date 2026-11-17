@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 import requests
+from psycopg.types.json import Jsonb
 
 from .places import _broker_type, _fixed, _lead_row, _upsert_places, region_from_address
 
@@ -31,6 +32,10 @@ KINDS = {
     "tax":    {"query": "세무사", "category": None, "classify": _fixed("tax", ("세무사", "세무법인", "세무,회계"), ("세무서", "행정기관", "회계사")),
                "seoul": True},
     "broker": {"query": None, "category": "AG2", "classify": _broker_type, "seoul": False},
+    # 이사·인테리어 (간접 정보 제공형 '이사·인테리어' 탭) — 카카오 분류로만 받고, 체급(국민연금)·점수는 home.py 가 매긴다
+    "interior": {"query": "인테리어", "category": None, "classify": _fixed("interior", ("건설,건축 > 인테리어",), ()), "seoul": True, "keep_cat": True},
+    "moving":   {"query": "이삿짐센터", "category": None, "classify": _fixed("moving", ("가정,생활 > 이사",), ()), "seoul": True, "keep_cat": True},
+    "clean":    {"query": "입주청소", "category": None, "classify": _fixed("clean", ("청소대행",), ()), "seoul": True, "keep_cat": True},
 }
 
 SCHEMA = """
@@ -157,6 +162,8 @@ def run_sweep(conn: psycopg.Connection, key: str, kinds: list[str], budget: int 
                         if not spec["seoul"] and (doc.get("address_name") or "").startswith("서울"):
                             continue                     # 서울 중개사는 등록부로
                         row = _lead_row(kind, "b2b2c", doc, reg[0])
+                        if row and spec.get("keep_cat"):   # 카카오 분류(프랜차이즈 표기 포함)를 같이 남김
+                            row = row[:6] + (Jsonb({**row[6].obj, "kcat": doc.get("category_name")}),) + row[7:]
                         if row:
                             rows.append(row)
                     ids = _upsert_places(conn, rows)

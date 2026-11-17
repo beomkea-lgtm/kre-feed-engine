@@ -27,6 +27,7 @@ import copy
 import html
 import logging
 import json
+import os
 import random
 import re
 import threading
@@ -184,7 +185,7 @@ def score_page(text: str, title: str, lead: dict, own: bool, postdate: str | Non
 def email_focus(conn: psycopg.Connection) -> list[str]:
     """집중해서 메일을 찾을 리드 종류 (app_state.email_focus, 기본: 세무사 → 중개사)."""
     try:
-        v = json.loads(get_state(conn, "email_focus") or '["tax","broker"]')
+        v = json.loads(os.environ.get("EMAIL_FOCUS") or get_state(conn, "email_focus") or '["tax","broker"]')
         return [str(x) for x in v] if isinstance(v, list) else ["tax", "broker"]
     except ValueError:
         return ["tax", "broker"]
@@ -235,6 +236,7 @@ def candidate_leads(conn: psycopg.Connection, s: Settings, active: list[str] | N
         from leads l
         where l.status <> 'rejected'
           and coalesce(l.contact->>'email', '') = ''
+          and (coalesce(l.type, '') not in ('interior', 'moving', 'clean') or l.contact->>'home_top' = 'true')   -- 이사·인테리어는 체급 상위만
           and (l.email_checked_at is null or l.email_checked_at < now() - (%(days)s || ' days')::interval
                or (l.id in (select lead_id from visible) and coalesce(l.email_depth, 0) < 2))   -- 화면에 보이는 리드는 깊게 한 번 더
           and (%(active)s::text[] is null or split_part(l.region_key, '|', 1) = any(%(active)s) or l.type = any(%(focus)s))
@@ -656,6 +658,7 @@ def _region_reverse(conn: psycopg.Connection, s: Settings, naver, active: list[s
         """
         select region_key from leads
         where coalesce(contact->>'email','') = '' and status <> 'rejected' and region_key like '%%|%%'
+          and coalesce(type, '') not in ('interior', 'moving', 'clean')
           and (%(a)s::text[] is null or split_part(region_key, '|', 1) = any(%(a)s))
         group by region_key order by count(*) desc limit %(n)s
         """,
@@ -666,6 +669,7 @@ def _region_reverse(conn: psycopg.Connection, s: Settings, naver, active: list[s
     by_phone: dict[str, tuple[str, str, str]] = {}   # 끝 8자리 → (lead_id, short_name, region_key)  메일 없는 리드만
     for lid, phone, name, rk in conn.execute(
         "select id, contact->>'phone', name, region_key from leads where coalesce(contact->>'email','') = '' and status <> 'rejected' "
+        "and coalesce(type, '') not in ('interior', 'moving', 'clean') "
         "and region_key = any(%s)", (regions,)
     ).fetchall():
         pd = phone_digits(phone)

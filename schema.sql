@@ -645,10 +645,15 @@ alter table applications enable row level security;
 alter table applications add column if not exists account text;
 
 -- 파이프라인 제휴처 바구니: 탭별 리드 한 줄 (가볍게 — lead_cards 의 무거운 집계 없이)
+-- (10분 캐시 basket_counts_mv 가 있으면 의존 관계 때문에 같이 지웠다가 다시 만든다)
+create temp table if not exists _had_basket_mv as select exists (select 1 from pg_matviews where matviewname = 'basket_counts_mv') v;
+drop materialized view if exists basket_counts_mv;
 drop view if exists basket_counts;
 drop view if exists basket_rows;
 create view basket_rows as
-select case when l.type in ('broker','tax','legal','platform') then l.type
+select case when l.type in ('interior','moving','clean') then 'home'                                   -- 이사·인테리어 (간접)
+            when l.type = 'platform' and l.contact->>'home_platform' = 'true' then 'home'
+            when l.type in ('broker','tax','legal','platform') then l.type
             when l.type = 'loan_broker' then 'loan'
             when s.segment = 'tech' and s.blog_id like '%.%' then 'chan'
             when s.segment = 'tech' then 'tblog'
@@ -666,13 +671,21 @@ left join lateral (select sequence, step, next_send_at from enrollments en where
 left join lateral (select max(occurred_at) as last_reply_at from events ev where ev.lead_id = l.id and ev.type = 'reply') r on true
 where l.type in ('influencer','influencer_tech','platform')
    or (l.type in ('broker','tax','legal') and coalesce(l.contact->>'email','') <> '')
-   or (l.type = 'loan_broker' and l.status <> 'hidden');   -- 대출중개 탭 (검증 통과분만 status<>hidden)
+   or (l.type = 'loan_broker' and l.status <> 'hidden')
+   or (l.type in ('interior','moving','clean') and l.contact->>'home_top' = 'true');   -- 체급(국민연금) 통과분만   -- 대출중개 탭 (검증 통과분만 status<>hidden)
 create view basket_counts as
 select tab, count(*) as total,
        count(*) filter (where coalesce(email,'') <> '') as mail,
        count(*) filter (where fit) as fit,
        count(*) filter (where active_sequence is not null) as on_
 from basket_rows group by tab;
+do $$ begin
+  if (select v from _had_basket_mv) then
+    execute 'create materialized view basket_counts_mv as select * from basket_counts';
+    execute 'create unique index if not exists basket_counts_mv_tab on basket_counts_mv (tab)';
+  end if;
+end $$;
+drop table if exists _had_basket_mv;
 
 -- 부동산·투자경제 양쪽에 걸린 블로거: 세그먼트별 점수를 따로 두고 높은 쪽 하나로 배정
 alter table influencer_stats add column if not exists score_direct numeric;
