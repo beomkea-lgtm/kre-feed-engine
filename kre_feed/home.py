@@ -313,7 +313,7 @@ PLATFORM_TIER = [
     (250, ("짐싸", "다이사", "이사타임", "이사로", "위매치", "이사", "통인", "익스프레스")),
     (200, ("숨고", "모두연결", "미소", "대리주부")),
     (150, ("클린벨", "청소연구소", "청연", "클린베테랑", "청소")),
-    (100, ("렌트리", "가전나우", "렌탈", "가전")),
+    (100, ("렌트리", "가전나우", "렌탈", "가전", "도배")),
     (50, ("헬로입주", "채들", "홈체크", "하자렌즈", "아이체크", "사전점검", "하자", "아파트너", "아파트아이")),   # 신축 입주·관리앱: 분양이거나 잔금 뒤라 늦음
 ]
 HOME_CATS = ("이사", "인테리어", "입주", "청소", "홈서비스", "가전", "렌탈", "하자", "프랜차이즈")
@@ -327,7 +327,7 @@ def tag_platforms(conn: psycopg.Connection) -> int:
         if not any(k in cat for k in HOME_CATS) or "코리빙" in cat or "1인가구" in cat:
             continue
         low = PLATFORM_TIER[-1]
-        sc = low[0] if any(k in (name or "") for k in low[1]) else next((s for s, keys in PLATFORM_TIER if any(k in (name or "") for k in keys)), None)
+        sc = low[0] if any(k in (name or "") for k in low[1]) else 100 if "도배" in (name or "") else next((s for s, keys in PLATFORM_TIER if any(k in (name or "") for k in keys)), None)
         if sc is None:
             sc = next((s for s, keys in PLATFORM_TIER if any(k in cat for k in keys)), 100)
         conn.execute("""update leads set score = %s, contact = coalesce(contact,'{}'::jsonb) || '{"home_platform": true}'::jsonb

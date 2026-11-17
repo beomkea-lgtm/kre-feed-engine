@@ -447,7 +447,7 @@ hm as (   -- 이사·인테리어: 플랫폼 + 체급(국민연금) 통과 지�
 u as (select * from mp union all select * from lnx union all select * from hm)
 select u.kind, u.id, u.name, u.phone, u.email, u.addr, u.url, u.homepage, u.best_rank, u.n_issues, u.score, u.headline, u.why,
        u.final, u.seg, u.contracts, u.touch_count, u.last_contact_at, u.last_reply_at, u.prio,
-       coalesce((region_of(u.addr)).sido, case when u.kind = 'home' then '전국' end) sido, (region_of(u.addr)).sigungu, ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
+       coalesce(nullif((region_of(u.addr)).sido, ''), case when u.kind = 'home' then '전국' end) sido, (region_of(u.addr)).sigungu, ev.meta->>'result' last_result, ev.meta->>'note' last_note, ev.occurred_at last_call_at
 from u left join lateral (
   select meta, occurred_at from events e where e.lead_id = u.id and e.type = 'contact' and e.meta->>'channel' in ('call','visit','sheet')
   order by occurred_at desc limit 1) ev on true;
